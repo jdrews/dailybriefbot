@@ -209,10 +209,11 @@ flowchart TD
 
 ### 4.1 Bot Core (`bot.py`)
 
-- Built on **discord.py** with the `commands.Cog` extension pattern.
+- Built on **discord.py** with minimal Cog usage (only for optional features).
 - Requires the **`message_content`** privileged intent (must be enabled in
   the Discord Developer Portal).
-- Slash commands for manual triggers and configuration.
+- **No slash commands.** All operations are triggered automatically via configuration.
+- The bot reads [`config.yaml`](config.yaml) on startup and processes all configured channels according to their schedules without any user intervention required.
 
 ### 4.2 Message Collector (`collector.py`)
 
@@ -429,27 +430,25 @@ dailybriefbot/
 ├── src/
 │   └── dailybriefbot/
 │       ├── __init__.py
-│       ├── __main__.py          # entry point
-│       ├── bot.py               # discord bot setup, cog loading
-│       ├── cogs/
-│       │   ├── __init__.py
-│       │   ├── summary.py       # slash commands for manual summary
-│       │   └── admin.py         # config/admin commands
+│       ├── __main__.py          # entry point (reads config.yaml on startup)
+│       ├── bot.py               # discord bot setup, event handlers
 │       ├── collector.py         # message fetching
 │       ├── preprocessor.py      # text cleaning
 │       ├── engine.py            # summarization strategies
 │       ├── heuristics.py        # tier 3 heuristic scoring
 │       ├── topics.py            # tier 2 spaCy topic extraction
 │       ├── publisher.py         # embed formatting & posting
-│       ├── scheduler.py         # APScheduler integration
-│       └── config.py            # configuration loading
-├── config.yaml                  # runtime configuration
+│       ├── scheduler.py         # APScheduler integration (config-driven)
+│       └── config.py            # configuration loading and validation
+├── config.yaml                  # runtime configuration (all settings here)
 ├── requirements.txt
 ├── pyproject.toml
 ├── Dockerfile                   # for deployment
 ├── .env.example
 └── README.md
 ```
+
+**Note:** The `cogs/` directory is removed. All functionality is driven by [`config.yaml`](config.yaml) rather than slash commands or admin panels.
 
 ---
 
@@ -480,22 +479,20 @@ dailybriefbot/
 - [ ] Basic preprocessor (strip mentions, emoji, code blocks)
 - [ ] Tier 1 summarization with sumy/LexRank
 - [ ] Simple embed formatter
-- [ ] Manual `/summarize` slash command
-- [ ] Basic scheduling with APScheduler
+- [ ] Config-driven scheduler integration (APScheduler reads from [`config.yaml`](config.yaml))
 
 ### Phase 2 — Enrichment
 - [ ] Tier 3 heuristic scoring (reactions, replies, length)
 - [ ] Tier 2 spaCy topic extraction
 - [ ] Composed summary embeds (all three tiers)
 - [ ] Multi-source-channel support (single server)
-- [ ] Config-driven channel mappings
 - [ ] Algorithm benchmarking: LexRank vs. TextRank vs. Luhn on real Discord data
 
 ### Phase 3 — Polish & Deploy
 - [ ] Dockerfile for deployment
 - [ ] Graceful error handling and retry logic
 - [ ] Logging and observability
-- [ ] `/config` admin commands for runtime tweaks
+- [ ] Runtime configuration validation (config-driven health checks)
 - [ ] Summary quality evaluation (optional ROUGE scoring against manual summaries)
 - [ ] README and setup documentation
 
@@ -510,3 +507,4 @@ dailybriefbot/
 | **Thread handling** | Fold into parent channel | Threads are collected and merged chronologically into the channel summary. |
 | **Algorithm benchmarking** | **TODO** — deferred | Will benchmark LexRank vs. TextRank vs. Luhn on real data before committing. |
 | **Summary length** | Scales with message volume | ~1 sentence per 20 messages, clamped between 3–15 sentences. |
+| **Commands** | No commands — purely config-driven | All operations are triggered automatically via [`config.yaml`](config.yaml). No slash commands or admin panels required. Users configure schedules and channels in the YAML file; the bot executes without user intervention. |
