@@ -10,30 +10,32 @@
 ```mermaid
 flowchart LR
     subgraph Discord
-        SC["#source-channel(s)"]
+        SC["#source-channel"]
         BC["#daily-brief"]
     end
 
     subgraph DailyBriefBot
+        SCH[Scheduler]
         COL[Message Collector]
         PRE[Preprocessor]
         SUM[Summarization Engine]
         FMT[Formatter / Publisher]
-        SCH[Scheduler]
     end
 
     SC -->|channel.history| COL
     COL --> PRE
     PRE --> SUM
     SUM --> FMT
-    FMT -->|Embed| BC
-    SCH -.->|triggers| COL
+    FMT -->|Discord Embed| BC
+    SCH -.->|global schedule| COL
 ```
 
-**Core idea:** On a timer (e.g. every hour or once daily), the bot pulls recent
-messages from one or more source channels, cleans and preprocesses them, runs a
-lightweight extractive summarization pipeline **entirely on CPU**, and posts the
-result as a rich Discord Embed into a briefing channel.
+**Core idea:** On a global timer (e.g. daily at 8 AM), the bot pulls recent messages from a single source channel, cleans and preprocesses them, runs a lightweight extractive summarization pipeline **entirely on CPU**, and posts the result as a rich Discord Embed into a briefing channel.
+
+**MVP simplifications:**
+- Single source → single target mapping (multi-channel support is future)
+- No thread handling (future feature)
+- Tier 2/3 summarization strategies are architecturally reserved but stubbed out for MVP
 
 ---
 
@@ -43,10 +45,10 @@ result as a rich Discord Embed into a briefing channel.
 |------|--------|
 | **CPU-only** | No GPU required. Must run comfortably on a low-end VPS or Raspberry Pi. |
 | **Cheap** | Zero API costs — all summarization is local. |
-| **Stateless / Privacy-first** | No message storage. Fetch → process → discard. Nothing persisted to disk or DB. |
+| **Stateless / Privacy-first** | No message content stored. Fetch → process → discard. Job history (timestamps, counts) and logs are tracked in lightweight files (<1KB). |
 | **Single-server** | Designed for one Discord server. No multi-guild routing needed. |
-| **Configurable** | Summary window, algorithm, channel mappings, and schedule are all config-driven. |
-| **Modular** | Summarization strategies are pluggable — easy to swap or A/B test. |
+| **Config-driven** | Summary window, algorithm, schedules are all config-driven; no commands or admin panel for MVP. |
+| **Modular** | Summarization strategies (Tier 1/2/3) are pluggable — easy to swap or A/B test. |
 | **Respectful of Discord API** | Handles rate limits, uses pagination, and batches writes. |
 
 ---
@@ -61,7 +63,7 @@ of the output embed.
 ### Tier 1 — Extractive Summary Libraries (TextRank / LexRank)
 
 These graph-based algorithms rank sentences by importance without generating new
-text. They are the **primary recommended approach**.
+text. They are the **primary recommended approach**. For MVP, this is the **only tier implemented**; Tier 2/3 will be added in Phase 2.
 
 ```mermaid
 flowchart TD
@@ -69,12 +71,12 @@ flowchart TD
     B --> C[Build Similarity Graph]
     C --> D[Run PageRank / LexRank]
     D --> E[Select Top-K Sentences]
-    E --> F[Reorder Chronologically]
+    E --> F[Signal-first ordering: reactions + reply depth > chronological]
     F --> G[Summary Output]
 ```
 
 | Library | Algorithm | Notes |
-|---------|-----------|-------|
+|---------|-----------|------|
 | **sumy** | TextRank, LexRank, Luhn, LSA, KL-Sum | Mature, lightweight, multiple algorithms in one package. **Recommended starting point.** |
 | **pytextrank** | TextRank (spaCy plugin) | Good if we're already using spaCy for preprocessing. |
 | **gensim** | TextRank variant | Heavier dependency; only worth it if we need topic modeling too. |
@@ -84,19 +86,14 @@ well on conversational text and has zero heavy dependencies.
 
 #### How It Works on Chat Data
 
-1. Concatenate messages (including thread replies folded into parent channel
-   context) within the time window into a pseudo-document, preserving paragraph
-   breaks between different authors.
+1. Concatenate messages (excluding threads) within the time window into a pseudo-document, preserving paragraph breaks between different authors.
 2. Sentence-tokenize the document.
 3. Build a cosine-similarity graph between sentence TF-IDF vectors.
 4. Run the PageRank algorithm to score each sentence.
-5. Select the top *K* sentences, where **K scales with message volume**
-   (default ratio: ~1 sentence per 20 messages, clamped to 3–15).
-6. Re-sort selected sentences in chronological order for readability.
+5. Select the top *K* sentences: **scales with message volume** (default ratio: ~1 sentence per 20 messages, clamped to min_sentences=3–max_sentences=15).
+6. Re-sort selected sentences by signal score (reaction count + reply depth weight > length) for importance-first ordering.
 
-> **TODO:** Run a benchmark comparing LexRank vs. TextRank vs. Luhn on real
-> Discord conversation data before committing to a default algorithm. Track
-> results with ROUGE scores against manually written summaries.
+> **TODO:** Run a benchmark comparing LexRank vs. TextRank vs. Luhn on real Discord conversation data before committing to a default algorithm. Track results with ROUGE scores against manually written summaries.
 
 ---
 
@@ -178,30 +175,27 @@ A simple ranked bullet list:
 
 ### Full Pipeline
 
-All three tiers run on every summary job and feed into a single embed:
+All three tiers are architecturally present, but for MVP only Tier 1 is implemented (Tier 2/3 stubbed as `pass` methods):
 
 ```mermaid
 flowchart TD
     RAW[Raw Messages] --> PRE[Preprocessor]
-    PRE --> T3[Tier 3: Heuristic Scoring]
-    PRE --> T2[Tier 2: spaCy Topic Extraction]
-    PRE --> T1[Tier 1: Extractive Summary]
+    PRE --> T1[Tier 1: LexRank Summary - ACTIVE]
+    PRE -.->|stubbed for MVP| T2[Tier 2: spaCy Topics]
+    PRE -.->|stubbed for MVP| T3[Tier 3: Heuristics]
 
-    T3 --> MERGE[Merge & Format]
-    T2 --> MERGE
-    T1 --> MERGE
-    MERGE --> EMBED["Discord Embed"]
-
-    subgraph "Embed Sections"
-        S1["📝 Summary - Tier 1"]
-        S2["🏷️ Topics & Entities - Tier 2"]
-        S3["🔥 Highlights - Tier 3"]
-    end
-
-    EMBED --> S1
-    EMBED --> S2
-    EMBED --> S3
+    T1 --> MERGE[Merge & Format]
+    T2 -.->|empty for MVP| MERGE
+    T3 -.->|empty for MVP| MERGE
+    MERGE --> EMBED["Discord Embed (<6000 chars)"]
 ```
+
+**Embed sections:**
+- 📝 Summary (Tier 1 - active)
+- 🏷️ Topics & Entities (Tier 2 - stubbed, empty for MVP)
+- 🔥 Highlights (Tier 3 - stubbed, empty for MVP)
+
+**Truncation strategy:** If embed exceeds 6000 chars, shorten Tier 1 summary sentences proportionally first.
 
 ---
 
@@ -224,27 +218,28 @@ Responsible for fetching messages from Discord channels.
 async def collect(channel_id: int, since: datetime) -> list[Message]:
     channel = bot.get_channel(channel_id)
     messages = []
+    
+    # Fetch main channel history (no threads for MVP)
     async for msg in channel.history(after=since, limit=None):
-        if not msg.author.bot:  # skip bot messages
+        if not msg.author.bot:  # skip bot/system messages
             messages.append(msg)
-    # Fold thread messages into the parent channel's message list
-    for thread in channel.threads:
-        async for msg in thread.history(after=since, limit=None):
-            if not msg.author.bot:
-                messages.append(msg)
-    messages.sort(key=lambda m: m.created_at)
+    
+    # API call budget protection: stop if we hit the limit per job
+    if len(messages) >= config.api_call_budget:
+        break
+    
+    messages.sort(key=lambda m: m.created_at, reverse=True)  # newest first for signal scoring
     return messages
 ```
 
 **Key considerations:**
 - Uses `channel.history(after=datetime)` with pagination.
-- **Threads are folded into the parent channel** — thread messages are collected
-  and merged chronologically with channel messages.
-- Respects Discord rate limits (discord.py handles this automatically).
+- **No thread support in MVP** — threads are excluded entirely (future feature).
+- Respects Discord rate limits (discord.py handles this automatically); adds delays between bulk history fetches.
 - Filters out bot messages, system messages, and empty messages.
-- Captures metadata: reactions, reply chains, attachments, embeds.
-- **Stateless:** Messages are held in memory only during processing, then discarded.
-  Nothing is written to disk or any database.
+- Captures metadata: reactions, reply chains, attachments, embeds for signal scoring.
+- **Stateless:** Messages are held in memory only during processing, then discarded. Nothing is written to disk or any database.
+- **API call budget:** Stops fetching after `max_calls` limit per job (default: 100) to prevent rate limit exhaustion.
 
 ### 4.3 Preprocessor (`preprocessor.py`)
 
@@ -279,57 +274,78 @@ class LexRankStrategy:
 
 ### 4.5 Formatter / Publisher (`publisher.py`)
 
-Converts the summarization output into a polished Discord Embed and posts it.
+Converts the summarization output into a polished Discord Embed and posts it. Truncates to <6000 chars if needed by shortening Tier 1 sentences proportionally. Supports inline clickable links for high-signal messages in Phase 2+.
 
+**MVP embed structure (no links):**
 ```
 ┌────────────────────────────────────────────┐
 │  📋 Daily Brief — #general                 │
-│  June 1, 2026 • Last 24 hours              │
+│  June 7, 2026 • Last 24 hours              │
+│  Summarizing 45 messages → 12 sentences    │
 ├────────────────────────────────────────────┤
 │                                            │
 │  📝 Summary                                │
 │  The community discussed the new release   │
 │  of version 2.0, with several members...   │
 │                                            │
-│  🏷️ Key Topics                             │
-│  `v2.0 release` · `migration guide` ·      │
-│  `API changes` · `Docker setup`            │
-│                                            │
 │  🔥 Highlights                             │
-│  • @alice shared the migration docs (8 👍) │
-│  • @bob reported a bug in the CLI (12 💬)  │
-│                                            │
-│  📊 Stats: 142 messages from 23 users      │
+│  • @alice shared migration docs (8 👍)     │
+│  • @bob reported a CLI bug (12 💬)         │
 ├────────────────────────────────────────────┤
 │  Bot • Today at 8:00 AM                    │
 └────────────────────────────────────────────┘
 ```
 
+**Phase 2+ embed with message links:**
+High-signal messages (> signal_threshold score) get inline clickable links to original Discord posts. Links are capped at `max_links_per_summary` to preserve <6000 char limit.
+
+```
+📝 Summary
+The community discussed v2.0 release  
+@alice shared migration docs [→](#msg_id) (8 👍)  ← linked if signal > threshold
+```
+
+**Truncation strategy:** If embed exceeds 6000 chars, shorten Tier 1 summary sentences proportionally first, then remove lowest-signal links as fallback.
+
 ### 4.6 Scheduler (`scheduler.py`)
 
-Uses **APScheduler** (`AsyncIOScheduler`) to trigger summary jobs.
+Uses **APScheduler** (`AsyncIOScheduler`) to trigger summary jobs with a **global schedule**. Job history is tracked in a tiny JSON file (~1KB) that records timestamps and success/failure — never message content.
 
 | Trigger Type | Example | Use Case |
 |-------------|---------|----------|
-| `IntervalTrigger` | Every 1 hour | Frequent pulse summaries |
-| `CronTrigger` | Daily at 8:00 AM | Daily digest |
-| `CronTrigger` | Every Sunday at 6 PM | Weekly roundup |
+| `CronTrigger` | `"0 8 * * *"` (daily at 8 AM) | Daily digest (default for MVP) |
+| `IntervalTrigger` | Every 6 hours | Frequent pulse summaries |
+
+**Last-run time logic:** The scheduler tracks the last successful job execution and uses it to calculate the `since` datetime, preventing duplicate message coverage:
 
 ```python
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+import json
+from datetime import timedelta, datetime
 
-scheduler = AsyncIOScheduler()
+# On bot startup:
+job_history = await JobHistory.get_last_successful()
+if job_history:
+    since = job_history['timestamp'] + timedelta(minutes=30)  # skip overlap
+else:
+    since = datetime.now() - timedelta(hours=24)  # fresh start if first run
 
-@bot.event
-async def on_ready():
-    scheduler.add_job(
-        run_summary,
-        CronTrigger(hour=8, minute=0),
-        args=[source_channel_id, target_channel_id],
-    )
-    scheduler.start()
+scheduler.add_job(
+    run_summary,
+    CronTrigger(hour=8, minute=0),
+    args=[source_channel_id, target_channel_id],
+    kwargs={'since': since},  # pass calculated time window
+)
 ```
+
+**Job history format:**
+```json
+[
+  {"timestamp": "2026-06-07T08:00:00Z", "channel_id": 123456, "success": true, "messages_processed": 45, "sentences_generated": 12}
+]
+```
+
+**Error handling:** Logs errors and continues; bot does not crash on individual job failures. Check `job_history.json` periodically to monitor execution.
 
 ---
 
@@ -367,41 +383,47 @@ All configuration lives in a single `config.yaml` (or `.env` + dataclass):
 ```yaml
 discord:
   token: ${DISCORD_TOKEN}
-  
+
+# Single source → single target mapping for MVP
 channels:
   - source: 123456789          # channel ID to read from
     target: 987654321          # channel ID to post summary to
-    schedule: "0 8 * * *"      # cron expression (daily at 8 AM)
+    schedule: "0 8 * * *"      # global cron expression (daily at 8 AM)
     window_hours: 24           # how far back to look
-    
-  - source: 111222333
-    target: 987654321
-    schedule: "0 * * * *"      # every hour
-    window_hours: 1
+
+# API call budget per job to prevent rate limit exhaustion
+api_call_budget: 100
 
 summarization:
-  strategy: "lexrank"          # lexrank | textrank | luhn | lsa | heuristic
+  strategy: "lexrank"          # lexrank | textrank | luhn | heuristic
   min_messages: 5              # skip summary if fewer messages
   
-  # Dynamic summary length: scales with message volume
-  sentences_per_n_messages: 20 # 1 summary sentence per N messages
+  # Dynamic summary length with hard cap for MVP
+  sentences_per_n_messages: 20 # ~1 sentence per N messages (scaling)
   min_sentences: 3             # floor
   max_sentences: 15            # ceiling
-  
+
   heuristics:
-    reaction_weight: 3.0
+    reaction_weight: 3.0       # signal-first: reactions + replies > length
     reply_depth_weight: 2.0
     length_weight: 1.0
     url_bonus: 1.5
+  
+  message_links:
+    enabled: false             # MVP disabled; Phase 2 feature
+    signal_threshold: 4.0      # score > this gets clickable link (reactions+replies weighted)
+    max_links_per_summary: 5   # cap to preserve embed truncation buffer (<6000 chars)
 
 nlp:
   spacy_model: "en_core_web_sm"
   max_topics: 5
-  enable_ner: true
+  enable_ner: true             # Tier 2 stubbed out for MVP
 
 logging:
   level: INFO
 ```
+
+**Global schedule approach:** All channels use the same global cron expression (e.g., `"0 8 * * *"`) rather than per-channel schedules. This simplifies scheduler logic and ensures consistent timing across all summaries.
 
 ---
 
@@ -414,6 +436,7 @@ logging:
 | Concern | Mitigation |
 |---------|------------|
 | **Rate limits** | `discord.py` handles 429s automatically; we add delays between bulk history fetches |
+| **API call budget** | Hard limit per job (default: 100 calls) to prevent exhaustion during multi-channel runs |
 | **Message history limit** | Paginate with `before`/`after`; realistically ~1000–5000 msgs per window is fine |
 | **Large servers** | Process channels independently; consider per-channel concurrency limits |
 | **Bot permissions** | Needs: Read Message History, Send Messages, Embed Links in target channel |
@@ -432,23 +455,22 @@ dailybriefbot/
 │       ├── __init__.py
 │       ├── __main__.py          # entry point (reads config.yaml on startup)
 │       ├── bot.py               # discord bot setup, event handlers
-│       ├── collector.py         # message fetching
+│       ├── collector.py         # message fetching (no threads for MVP)
 │       ├── preprocessor.py      # text cleaning
-│       ├── engine.py            # summarization strategies
-│       ├── heuristics.py        # tier 3 heuristic scoring
-│       ├── topics.py            # tier 2 spaCy topic extraction
-│       ├── publisher.py         # embed formatting & posting
-│       ├── scheduler.py         # APScheduler integration (config-driven)
+│       ├── engine.py            # summarization strategies (Tier 1 active, 2/3 stubbed)
+│       ├── publisher.py         # embed formatting & posting with truncation
+│       ├── scheduler.py         # APScheduler integration + job history tracking
+│       ├── job_history.py       # lightweight JSON tracker (~1KB file)
 │       └── config.py            # configuration loading and validation
-├── config.yaml                  # runtime configuration (all settings here)
+├── config.yaml                  # runtime configuration (single channel, global schedule)
 ├── requirements.txt
 ├── pyproject.toml
 ├── Dockerfile                   # for deployment
 ├── .env.example
-└── README.md
+└── logs/                       # directory for log rotation
 ```
 
-**Note:** The `cogs/` directory is removed. All functionality is driven by [`config.yaml`](config.yaml) rather than slash commands or admin panels.
+**Note:** The `cogs/` directory is removed. All functionality is driven by [`config.yaml`](config.yaml) rather than slash commands or admin panels. Tier 2 (`topics.py`) and Tier 3 (`heuristics.py`) files are stubbed out for MVP but not fully implemented (to be added in Phase 2).
 
 ---
 
@@ -473,38 +495,53 @@ dailybriefbot/
 ## 10. Implementation Roadmap
 
 ### Phase 1 — MVP (Minimum Viable Bot)
-- [ ] Project scaffolding (pyproject.toml, config loading)
-- [ ] Bot core with `message_content` intent
-- [ ] Message collector with pagination
-- [ ] Basic preprocessor (strip mentions, emoji, code blocks)
-- [ ] Tier 1 summarization with sumy/LexRank
-- [ ] Simple embed formatter
-- [ ] Config-driven scheduler integration (APScheduler reads from [`config.yaml`](config.yaml))
+- [ ] Project scaffolding (`pyproject.toml`, config loading + validation script)
+- [ ] Bot core with `message_content` intent and startup entry point
+- [ ] Message collector with pagination (no threads; API call budget limit)
+- [ ] Basic preprocessor (strip mentions, emoji, code blocks, normalize text)
+- [ ] Tier 1 summarization with sumy/LexRank only (Tier 2/3 stubbed as `pass` methods in `engine.py`)
+- [ ] Embed formatter with truncation strategy (<6000 chars, shorten Tier 1 proportionally if needed)
+- [ ] Job history tracker (`job_history.json`) for last-run time calculation and execution monitoring
+- [ ] Config-driven global scheduler integration (APScheduler reads from [`config.yaml`](config.yaml))
 
-### Phase 2 — Enrichment
-- [ ] Tier 3 heuristic scoring (reactions, replies, length)
-- [ ] Tier 2 spaCy topic extraction
-- [ ] Composed summary embeds (all three tiers)
-- [ ] Multi-source-channel support (single server)
+### Phase 2 — Enrichment & Multi-channel
+- [ ] Tier 3 heuristic scoring (reaction + reply depth signal-first ranking)
+- [ ] **Message links for high-signal messages** (inline clickable, threshold: 4.0, max: 5 per summary)
+- [ ] Tier 2 spaCy topic extraction and entity recognition
+- [ ] Composed summary embeds (all three tiers populated)
+- [ ] Multi-source-channel support with per-channel schedules in YAML
+- [ ] Thread handling (fold into parent or separate thread embeds)
 - [ ] Algorithm benchmarking: LexRank vs. TextRank vs. Luhn on real Discord data
 
 ### Phase 3 — Polish & Deploy
-- [ ] Dockerfile for deployment
-- [ ] Graceful error handling and retry logic
-- [ ] Logging and observability
-- [ ] Runtime configuration validation (config-driven health checks)
+- [ ] Dockerfile for containerized deployment
+- [ ] Graceful error handling and retry logic per job
+- [ ] Structured logging with rotation (`logs/dailybrief.log`)
+- [ ] Runtime configuration validation (health checks, config-driven alerts)
 - [ ] Summary quality evaluation (optional ROUGE scoring against manual summaries)
-- [ ] README and setup documentation
+- [ ] README and setup documentation with deployment guide
+
+### Phase 4 — User Experience & Admin Tools
+- [ ] Command UI for users (`/pause`, `/status`, `/test-run`)
+- [ ] Web dashboard or Discord panel for monitoring job history
+- [ ] Real-time notification system (alert on summary failures)
 
 ---
 
 ## 11. Design Decisions (Resolved)
 
 | Question | Decision | Rationale |
-|----------|----------|----------|
-| **Storage** | No storage — stateless | Privacy-first. Fetch → process → discard. |
-| **Multi-server** | Single server only | Simplifies config and permissions. |
-| **Thread handling** | Fold into parent channel | Threads are collected and merged chronologically into the channel summary. |
+|----------|----------|-----------|
+| **Storage** | No message storage — stateless; job history + logs allowed | Privacy-first: no PII persisted. Only timestamps/counts in ~1KB JSON file for monitoring. |
+| **Multi-server** | Single server only | Simplifies config, permissions, and deployment. |
+| **Thread handling** | Excluded for MVP (future) | Side conversations dilute summary quality; can be added after core pipeline is stable. |
+| **Multi-channel config** | Single source → single target only (MVP); future expansion | Reduces YAML complexity and scheduler logic initially. Multi-channel supported in Phase 2. |
 | **Algorithm benchmarking** | **TODO** — deferred | Will benchmark LexRank vs. TextRank vs. Luhn on real data before committing. |
-| **Summary length** | Scales with message volume | ~1 sentence per 20 messages, clamped between 3–15 sentences. |
-| **Commands** | No commands — purely config-driven | All operations are triggered automatically via [`config.yaml`](config.yaml). No slash commands or admin panels required. Users configure schedules and channels in the YAML file; the bot executes without user intervention. |
+| **Summary length** | Scales with message volume (1 sentence per N messages, clamped to min=3–max=15) | Balances brevity with coverage; hard cap prevents runaway embeds. |
+| **Commands/UI** | No commands — purely config-driven for MVP | All operations triggered automatically via [`config.yaml`](config.yaml). Command UI is future (Phase 2+). |
+| **Message links** | Inline clickable links for high-signal messages only (signal_threshold: 4.0, max_links_per_summary: 5) | Phase 2 feature; preserves embed space by capping link count and only linking to important messages (reactions/replies weighted score > 4.0). Configurable in [`config.yaml`](config.yaml). |
+| **Spacy model caching** | Download once on disk, persist across restarts | Model weights ≠ PII; safe to cache (~12MB) while messages remain ephemeral. |
+| **Spacy model caching** | Download once on disk, persist across restarts | Model weights ≠ PII; safe to cache (~12MB) while messages remain ephemeral. |
+| **Empty channel behavior** | Minimal embed: "No activity detected" | Graceful handling for low-traffic periods without clutter. |
+| **Config validation** | Hard block on startup with clear error messages | Saves hours of debugging broken configs; validates cron expressions, required fields, and strategy names. |
+| **Error recovery** | Log errors and continue; no crash on individual job failures | Operational resilience: bot keeps running even if one summary fails. Check `job_history.json` to monitor execution. |
