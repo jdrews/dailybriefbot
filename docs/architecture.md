@@ -235,11 +235,13 @@ async def collect(channel_id: int, since: datetime) -> list[Message]:
 **Key considerations:**
 - Uses `channel.history(after=datetime)` with pagination.
 - **No thread support in MVP** — threads are excluded entirely (future feature).
-- Respects Discord rate limits (discord.py handles this automatically); adds delays between bulk history fetches.
+- Respects Discord rate limits (`discord.py` handles this automatically); adds delays between bulk history fetches.
 - Filters out bot messages, system messages, and empty messages.
 - Captures metadata: reactions, reply chains, attachments, embeds for signal scoring.
 - **Stateless:** Messages are held in memory only during processing, then discarded. Nothing is written to disk or any database.
 - **API call budget:** Stops fetching after `max_calls` limit per job (default: 100) to prevent rate limit exhaustion.
+- **Error recovery:** Logs malformed input errors but continues processing remaining messages (partial summary if needed).
+
 
 ### 4.3 Preprocessor (`preprocessor.py`)
 
@@ -281,7 +283,6 @@ Converts the summarization output into a polished Discord Embed and posts it. Tr
 ┌────────────────────────────────────────────┐
 │  📋 Daily Brief — #general                 │
 │  June 7, 2026 • Last 24 hours              │
-│  Summarizing 45 messages → 12 sentences    │
 ├────────────────────────────────────────────┤
 │                                            │
 │  📝 Summary                                │
@@ -292,6 +293,7 @@ Converts the summarization output into a polished Discord Embed and posts it. Tr
 │  • @alice shared migration docs (8 👍)     │
 │  • @bob reported a CLI bug (12 💬)         │
 ├────────────────────────────────────────────┤
+│  Summarizing 45 messages → 12 sentences    │
 │  Bot • Today at 8:00 AM                    │
 └────────────────────────────────────────────┘
 ```
@@ -338,12 +340,20 @@ scheduler.add_job(
 )
 ```
 
-**Job history format:**
+**Job history format:** Each entry includes full execution metadata for monitoring:
 ```json
-[
-  {"timestamp": "2026-06-07T08:00:00Z", "channel_id": 123456, "success": true, "messages_processed": 45, "sentences_generated": 12}
-]
+{
+  "timestamp": "2026-06-07T08:00:00Z",
+  "channel_id": 123456,
+  "success": true,
+  "messages_processed": 45,
+  "sentences_generated": 12,
+  "duration_ms": 234,
+  "error_message": null          // if failed
+}
 ```
+
+**Log rotation:** `logs/dailybrief.log` rotates at fixed size (20MB per file) to prevent disk space exhaustion. Old logs are archived and compressed automatically.
 
 **Error handling:** Logs errors and continues; bot does not crash on individual job failures. Check `job_history.json` periodically to monitor execution.
 
@@ -528,7 +538,7 @@ dailybriefbot/
 ### Phase 3 — Polish & Deploy
 - [ ] Dockerfile for containerized deployment
 - [ ] Graceful error handling and retry logic per job
-- [ ] Structured logging with rotation (`logs/dailybrief.log`)
+- [ ] Structured logging with rotation (`logs/dailybrief.log`, max file size: 20MB)
 - [ ] Runtime configuration validation (health checks, config-driven alerts)
 - [ ] Summary quality evaluation (optional ROUGE scoring against manual summaries)
 - [ ] README and setup documentation with deployment guide
@@ -551,9 +561,12 @@ dailybriefbot/
 | **Algorithm benchmarking** | **TODO** — deferred | Will benchmark LexRank vs. TextRank vs. Luhn on real data before committing. |
 | **Summary length** | Scales with message volume (1 sentence per N messages, clamped to min=3–max=15) | Balances brevity with coverage; hard cap prevents runaway embeds. |
 | **Commands/UI** | No commands — purely config-driven for MVP | All operations triggered automatically via [`config.yaml`](config.yaml). Command UI is future (Phase 2+). |
-| **Message links** | Inline clickable links for high-signal messages only (signal_threshold: 4.0, max_links_per_summary: 5) | Phase 2 feature; preserves embed space by capping link count and only linking to important messages (reactions/replies weighted score > 4.0). Configurable in [`config.yaml`](config.yaml). |
-| **Priority users** | Flat list of user IDs with configurable signal multipliers (e.g., `multiplier: 2.0`) | Phase 2 feature; high-priority users' messages get boosted signal scores before threshold comparison. Global threshold applies to all users after multiplier is applied. No role-based distinction in MVP. |
+| **Message links** | Inline clickable links for high-signal messages only (signal_threshold: 4.0, max_links_per_summary: 5) | Phase 2 feature; preserves embed space by capping link count and only linking to important messages (reactions/replies weighted score > 4.0). Format: `sentence [→](url)` with icon at end. Configurable in [`config.yaml`](config.yaml). |
+| **Priority users** | Flat list of user IDs with configurable signal multipliers (e.g., `multiplier: 2.0`) | Phase 2 feature; high-priority users' messages get boosted signal scores before threshold comparison. Global threshold applies to all users after multiplier is applied. No role-based distinction in MVP. Validated on startup with clear error if invalid values detected. |
 | **Spacy model caching** | Download once on disk, persist across restarts | Model weights ≠ PII; safe to cache (~12MB) while messages remain ephemeral. |
+| **Empty channel behavior** | Skip posting entirely if zero user messages (Option A) | Avoids cluttering daily brief with empty summaries for low-traffic periods. Logs are still written. |
+| **Config validation** | Hard block on startup with clear error messages | Saves hours of debugging broken configs; validates cron expressions, required fields, and strategy names. Priority users validated on startup (multiplier must be numeric > 0). |
+| **Error recovery** | Log errors and continue; no crash on individual job failures | Operational resilience: bot keeps running even if one summary fails. Check `job_history.json` to monitor execution. Malformed input errors are logged but processing continues with remaining messages. |
 | **Spacy model caching** | Download once on disk, persist across restarts | Model weights ≠ PII; safe to cache (~12MB) while messages remain ephemeral. |
 | **Empty channel behavior** | Minimal embed: "No activity detected" | Graceful handling for low-traffic periods without clutter. |
 | **Config validation** | Hard block on startup with clear error messages | Saves hours of debugging broken configs; validates cron expressions, required fields, and strategy names. |
