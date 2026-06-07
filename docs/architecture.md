@@ -414,6 +414,17 @@ summarization:
     signal_threshold: 4.0      # score > this gets clickable link (reactions+replies weighted)
     max_links_per_summary: 5   # cap to preserve embed truncation buffer (<6000 chars)
 
+  priority_users:              # NEW: Flat list of high-priority users with signal multipliers
+    - id: "123456789"         # Discord User ID (numeric string)
+      multiplier: 2.0          # Their signal score gets ×2 weight (Phase 2)
+    - id: "987654321"
+      multiplier: 3.0          # Higher priority users
+
+  # Signal scoring with priority users:
+  # base_score = (reactions × 3.0) + (reply_depth × 2.0) + (length_weight × normalized_length)
+  # final_score = base_score × multiplier (if user in priority_users, else ×1.0)
+  # Linking applies global signal_threshold AFTER multiplier is applied
+
 nlp:
   spacy_model: "en_core_web_sm"
   max_topics: 5
@@ -507,6 +518,7 @@ dailybriefbot/
 ### Phase 2 — Enrichment & Multi-channel
 - [ ] Tier 3 heuristic scoring (reaction + reply depth signal-first ranking)
 - [ ] **Message links for high-signal messages** (inline clickable, threshold: 4.0, max: 5 per summary)
+- [ ] **Priority users configuration** (flat list of user IDs with signal multipliers in `config.yaml`)
 - [ ] Tier 2 spaCy topic extraction and entity recognition
 - [ ] Composed summary embeds (all three tiers populated)
 - [ ] Multi-source-channel support with per-channel schedules in YAML
@@ -540,6 +552,7 @@ dailybriefbot/
 | **Summary length** | Scales with message volume (1 sentence per N messages, clamped to min=3–max=15) | Balances brevity with coverage; hard cap prevents runaway embeds. |
 | **Commands/UI** | No commands — purely config-driven for MVP | All operations triggered automatically via [`config.yaml`](config.yaml). Command UI is future (Phase 2+). |
 | **Message links** | Inline clickable links for high-signal messages only (signal_threshold: 4.0, max_links_per_summary: 5) | Phase 2 feature; preserves embed space by capping link count and only linking to important messages (reactions/replies weighted score > 4.0). Configurable in [`config.yaml`](config.yaml). |
+| **Priority users** | Flat list of user IDs with configurable signal multipliers (e.g., `multiplier: 2.0`) | Phase 2 feature; high-priority users' messages get boosted signal scores before threshold comparison. Global threshold applies to all users after multiplier is applied. No role-based distinction in MVP. |
 | **Spacy model caching** | Download once on disk, persist across restarts | Model weights ≠ PII; safe to cache (~12MB) while messages remain ephemeral. |
 | **Spacy model caching** | Download once on disk, persist across restarts | Model weights ≠ PII; safe to cache (~12MB) while messages remain ephemeral. |
 | **Empty channel behavior** | Minimal embed: "No activity detected" | Graceful handling for low-traffic periods without clutter. |
