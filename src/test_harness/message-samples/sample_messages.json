@@ -1,0 +1,32 @@
+[
+  {
+    "id": "msg_001",
+    "content": "Hello everyone! This is my first message about the new project.",
+    "author": {"id": "user_123"},
+    "created_at": "2026-06-07T18:00:00"
+  },
+  {
+    "id": "msg_002",
+    "content": "How are you doing today? Hope everything's going well with the development.",
+    "author": {"id": "user_456"},
+    "created_at": "2026-06-07T18:05:00"
+  },
+  {
+    "id": "msg_003",
+    "content": "Just wanted to share some thoughts about the project architecture we discussed.",
+    "author": {"id": "user_789"},
+    "created_at": "2026-06-07T18:10:00"
+  },
+  {
+    "id": "msg_004",
+    "content": "The team has been making great progress on the core features this week.",
+    "author": {"id": "user_321"},
+    "created_at": "2026-06-07T18:15:00"
+  },
+  {
+    "id": "msg_005",
+    "content": "Remember to review the pull requests before merging into main branch.",
+    "author": {"id": "user_654"},
+    "created_at": "2026-06-07T18:20:00"
+  }
+]
